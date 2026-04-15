@@ -33,11 +33,23 @@ const app = express();
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
 
+async function loadImageBytes(imageSource) {
+  if (/^https?:\/\//i.test(imageSource)) {
+    const response = await fetch(imageSource);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${imageSource} (${response.status})`);
+    }
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
+  return fs.readFileSync(imageSource);
+}
+
 async function compareTwoFaces(sourceImagePath, targetImagePath) {
   try {
-    // Read the image files into memory as Buffers
-    const sourceImageBytes = fs.readFileSync(sourceImagePath);
-    const targetImageBytes = fs.readFileSync(targetImagePath);
+    const sourceImageBytes = await loadImageBytes(sourceImagePath);
+    const targetImageBytes = await loadImageBytes(targetImagePath);
 
     // Set up the parameters for the API call
     const params = {
@@ -71,21 +83,34 @@ async function compareTwoFaces(sourceImagePath, targetImagePath) {
       console.log(`Found ${response.UnmatchedFaces.length} face(s) in the target image that did NOT match.`);
     }
 
+    return response;
+
   } catch (error) {
     console.error("Error comparing faces:", error);
+    throw error;
   }
 }
 
 app.post("/verify-device/:id",async(req,res)=>{
+ try {
+  const data = await client.query("select * from devices where device_id = $1",[req.params.id]);
+  if(data.rowCount === 0){
+    return res.status(404).send("Device not found");
+  }
 
- const data = await client.query("select * from devices where device_id = $1",[req.params.id]);
- if(data){
-    return res.status(200).send("DEVICE VERIFIED: Alloted to "+data.rows[0].uid);
-    const data2 = await client.query("select * from users where uid=$1",data.rows[0].uid);
-    compareTwoFaces(data2.rows[0].image, 'https://res.cloudinary.com/prarthana/image/upload/q_auto/f_auto/v1776271738/xabgcwssj2pbw4ayypgm.jpg');
+  const data2 = await client.query("select * from users where uid=$1", [data.rows[0].uid]);
+  if (data2.rowCount === 0) {
+    return res.status(404).send("User not found for device");
+  }
 
+  const result = await compareTwoFaces(
+    data2.rows[0].image,
+    'https://res.cloudinary.com/prarthana/image/upload/q_auto/f_auto/v1776271738/xabgcwssj2pbw4ayypgm.jpg'
+  );
+  return res.status(200).json(result);
+ } catch (error) {
+  return res.status(500).json({ error: error.message || 'Failed to verify device' });
  }
-
 
 })
 
